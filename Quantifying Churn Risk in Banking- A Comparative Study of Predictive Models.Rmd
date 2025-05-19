@@ -1,0 +1,410 @@
+---
+title: "Analysis"
+author: "Raheela Charania, Emmanuel Wediko, Anmol Archala"
+date: "2024-11-20"
+output: html_document
+---
+
+####Import dataset, partition, export test and training datasets.
+```{r}
+####Upload File####
+data <- read.csv("~/Downloads/Dataset 19-Customer-Churn-Records(in).csv")
+#View(data)
+data <- data[ , !(names(data) %in% c("RowNumber", "CustomerId", "Surname"))]
+
+set.seed(123)
+
+####Removed outliers####
+Q1_age <- quantile(data$Age, 0.25)
+Q3_age <- quantile(data$Age, 0.75)
+IQR_age <- Q3_age - Q1_age
+lower_bound_age <- Q1_age - 1.5 * IQR_age
+upper_bound_age <- Q3_age + 1.5 * IQR_age
+data <- data[data$Age >= lower_bound_age & data$Age <= upper_bound_age, ]
+
+Q1_products <- quantile(data$NumOfProducts, 0.25)
+Q3_products <- quantile(data$NumOfProducts, 0.75)
+IQR_products <- Q3_products - Q1_products
+lower_bound_products <- Q1_products - 1.5 * IQR_products
+upper_bound_products <- Q3_products + 1.5 * IQR_products
+data <- data[data$NumOfProducts >= lower_bound_products & data$NumOfProducts <= upper_bound_products, ]
+
+Q1_score <- quantile(data$CreditScore, 0.25)
+Q3_score <- quantile(data$CreditScore, 0.75)
+IQR_score <- Q3_score - Q1_score
+lower_bound_score <- Q1_score - 1.5 * IQR_score
+upper_bound_score <- Q3_score + 1.5 * IQR_score
+data <- data[data$CreditScore >= lower_bound_score & data$CreditScore <= upper_bound_score, ]
+
+write.csv(data, "~/Desktop/Cleaned_Customer_Churn_Records.csv", row.names = FALSE)
+getwd()
+
+data1 <- read.csv("~/Desktop/Cleaned_Customer_Churn_Records.csv")
+
+ExitedPercentages <- prop.table(table(data$Exited)) * 100
+ExitedPercentages
+# Exited: 0 refers to false (did not churn) and 1 refers to true(did churn)
+# 0     1 
+# 79.62 20.38 
+
+
+
+####Convert to dummy variables####
+#install.packages("fastDummies")
+library(fastDummies)
+
+data1_dummies <- dummy_cols(data, select_columns = "Geography", remove_selected_columns = TRUE, remove_first_dummy = TRUE)
+data1_dummies <- dummy_cols(data1_dummies, select_columns = "Card.Type", remove_selected_columns = TRUE, remove_first_dummy = TRUE)
+data1_dummies <- dummy_cols(data1_dummies, select_columns = "Gender", remove_selected_columns = TRUE, remove_first_dummy = TRUE)
+
+#Geography reference is France
+#Card.Type reference is Diamond
+#Gender reference is Female
+str(data1_dummies)
+#View(data1_dummies)
+
+
+
+####Standardize dataset####
+#These are the variables that need to be standardized: CreditScore, Age, Tenure, Balance, NumOfProducts, EstimatedSalary,Points.Earned.
+
+#z score standardization
+data1_dummies$CreditScore <- (data1_dummies$CreditScore - mean(data1_dummies$CreditScore)/ sd(data1_dummies$CreditScore))
+
+data1_dummies$Age <- (data1_dummies$Age - mean(data1_dummies$Age)/ sd(data1_dummies$Age))
+
+data1_dummies$Tenure <- (data1_dummies$Tenure - mean(data1_dummies$Tenure)/ sd(data1_dummies$Tenure))
+
+data1_dummies$Balance <- (data1_dummies$Balance - mean(data1_dummies$Balance)/ sd(data1_dummies$Balance))
+
+data1_dummies$NumOfProducts <- (data1_dummies$NumOfProducts - mean(data1_dummies$NumOfProducts)/ sd(data1_dummies$NumOfProducts))
+
+data1_dummies$EstimatedSalary <- (data1_dummies$EstimatedSalary - mean(data1_dummies$EstimatedSalary)/ sd(data1_dummies$EstimatedSalary))
+
+data1_dummies$Point.Earned <- (data1_dummies$Point.Earned - mean(data1_dummies$Point.Earned)/ sd(data1_dummies$Point.Earned))
+
+
+####move exited column to the end of the dataset####
+library(dplyr)
+data1 <- data1_dummies %>% relocate(Exited, .after = last_col())
+
+####Partition dataset####
+train_size <- floor(0.7 * nrow(data1))
+
+train_indices <- sample(seq_len(nrow(data1)), size = train_size)
+
+train_data_std <- data1[train_indices, ]
+test_data_std <- data1[-train_indices, ]
+
+cat("Training Set Size:", nrow(train_data_std), "\n")
+cat("Testing Set Size:", nrow(test_data_std), "\n")
+
+
+
+write.csv(train_data_std, "train_data.csv", row.names = FALSE)
+write.csv(test_data_std, "test_data.csv", row.names = FALSE)
+
+getwd()
+
+####Balance dataset####
+
+library(ROSE)
+data.train.balanced.both = ovun.sample(Exited ~ . , data=train_data_std, p=0.5, method="both")
+
+data.train.balanced.both = data.train.balanced.both$data
+table(data.train.balanced.both$Exited)/nrow(data.train.balanced.both)
+
+```
+
+
+```{r}
+
+set.seed(123)
+
+# #numerical values only
+# library(dplyr)
+# train_data_num <- train_data %>% select_if(is.numeric)
+# correlation_matrix1 <- cor(train_data_num, use = "complete.obs")
+
+####Heatmap, Remove complain variable####
+#heatmap
+library(ggcorrplot)
+str(data1)
+ggcorrplot(cor(data.train.balanced.both), type = "lower", lab = TRUE, method = "circle", title = "Correlation Matrix Heatmap")
+
+#Based on the heatmap, we decided to remove complain as a predictor variable since it has a 1:1 correlation with the target variable. 
+
+data.train.balanced.both$Complain <- NULL
+data.train.balanced.both$Complain <- NULL
+#View(data.train.balanced.both)
+
+
+##Run forward, backward, stepwise model selection methods##
+
+null_model <- glm(Exited ~ 1, data = data.train.balanced.both, family="binomial") # no predictors
+model <- glm(Exited ~ ., data = data.train.balanced.both, family="binomial") #all predictors except Complain. Complain was removed from entire dataset.
+
+
+forward_model <- step(null_model, scope = list(lower = null_model, upper = model), direction = "forward")
+summary(forward_model)
+
+
+backward_model <- step(model, direction = "backward")
+summary(backward_model)
+
+
+stepwise_model <- step(model, direction = "both")
+summary(stepwise_model)
+
+
+predicted.test.prob = predict(stepwise_model, type ="response")
+
+predicted.classes <- ifelse(predicted.test.prob > 0.5, 1, 0)
+
+table <- table(Predicted = predicted.classes, Actual = data.train.balanced.both$Exited)
+
+table(data.train.balanced.both$Exited)
+
+
+#Confusion Matrix
+library(caret)
+ConfMatrix_Log <- confusionMatrix(as.factor(predicted.classes), as.factor(train_data_std$Exited))
+
+library(pROC)
+log_roc = roc(train_data_std$Exited, predicted.test.prob)
+?roc
+auc(log_roc)
+plot(log_roc)
+
+##Log Results##
+ConfMatrix_Log
+auc(log_roc)
+plot(log_roc)
+
+```
+
+
+```{r}
+##KNN##
+
+library(caret)
+library(e1071)
+numFolds = trainControl( method = "cv", number = 10 )
+kGrid = expand.grid( k = seq(1,20,1))
+
+#View(data.train.balanced.both)
+
+
+#Running without tuning
+library(class)
+pred_KNN_train_Proj_Churn = knn(train = data.train.balanced.both[,c(1:16)], test = data.train.balanced.both[,c(1:16)], cl = data.train.balanced.both$Exited, k = 3, prob = FALSE)
+
+str(data.train.balanced.both)
+
+##tune parameters
+data.train.balanced.both$Exited <- as.factor(data.train.balanced.both$Exited)
+train(Exited ~ ., data = data.train.balanced.both, method ="knn", trControl = numFolds, tuneGrid = kGrid )
+#View(data.train.balanced.both)
+
+#new KNN with optimal value of K
+library(class)
+pred_KNN_train_Proj_Exited = knn(train = data.train.balanced.both[,c(1:16)], test = data.train.balanced.both[,c(1:16)], cl = data.train.balanced.both$Exited, k = 3, prob = FALSE)
+
+KNNconfMatrix = confusionMatrix(pred_KNN_train_Proj_Exited, data.train.balanced.both$Exited)
+KNNconfMatrix
+
+
+library(pROC)
+KNN_roc_Churn = roc(response = data.train.balanced.both$Exited, predictor = as.numeric(pred_KNN_train_Proj_Exited))
+KNN_roc_Churn$auc
+plot(KNN_roc_Churn)
+
+##KNN Results##
+KNNconfMatrix
+KNN_roc_Churn$auc
+plot(KNN_roc_Churn)
+```
+
+##CART 
+```{r}
+library(rpart)
+library(rpart.plot)
+CART.Churn = rpart(Exited ~ ., data = data.train.balanced.both, method="class")
+prp(CART.Churn)
+
+#predictions
+predict_class.cart = predict(CART.Churn, newdata = data.train.balanced.both, type = "class")
+
+data.train.balanced.both$Exited <- as.factor(data.train.balanced.both$Exited)
+
+# build the confusion Matrix
+library(caret)
+confMatrixCART<- confusionMatrix(data = predict_class.cart, reference =data.train.balanced.both$Exited)
+confMatrixCART
+
+predictClassCart1 <- predict(CART.Churn, newdata = data.train.balanced.both, type = "prob")
+
+library(pROC)
+rocCurveCART <- roc(response = data.train.balanced.both$Exited, predictor = predictClassCart1[,2])
+auc(rocCurveCART)
+plot(rocCurveCART)
+
+##CART Results##
+confMatrixCART
+auc(rocCurveCART)
+plot(rocCurveCART)
+
+```
+
+
+##Random Forest
+```{r}
+library(randomForest)
+RandomForest_Exited = randomForest(Exited ~ ., data = data.train.balanced.both, ntree=200, nodesize=25, importance = TRUE)
+RandomForest_Exited
+
+# Make predictions
+predict_class.rf = predict(RandomForest_Exited, newdata = test_data_std)
+confusionMatrix(data = predict_class.rf, reference = as.factor(test_data_std$Exited))
+
+# random forest with cross-validation. 
+search_grid <- expand.grid(mtry = 1:(ncol(data.train.balanced.both) - 1))
+train(Exited ~ ., data = data.train.balanced.both, method = "rf", trControl = numFolds, tuneGrid = search_grid, ntree=100, nodesize=10 )
+
+# Make predictions
+predict_class.rf = predict(RandomForest_Exited, newdata = test_data_std)
+confMatrix.RF <- confusionMatrix(data = predict_class.rf, reference = as.factor(test_data_std$Exited))
+confMatrix.RF
+
+varImpPlot(RandomForest_Exited, type = 1)
+
+library(randomForest)
+library(caret)
+library(pROC)
+
+predict_prob.rf = predict(RandomForest_Exited, newdata = test_data_std, type = "prob")
+
+# Calculate the ROC curve
+roc_curve = roc(response = test_data_std$Exited, predictor = predict_prob.rf[, 2])
+
+#RF ROC
+library(pROC)
+roc_curve_RF = roc(response = test_data_std$Exited, predictor = predict_prob.rf[,2])
+plot(roc_curve_RF)
+auc(roc_curve_RF)
+
+##RF Results##
+confMatrix.RF
+auc(roc_curve_RF)
+plot(roc_curve_RF)
+```
+
+
+```{r}
+
+table <- data.frame(
+  Algorithm = c("Logistic Regression", "CART", "Random Forest", "KNN"),
+  Accuracy = c(ConfMatrix_Log$overall['Accuracy'], 
+               confMatrixCART$overall['Accuracy'], 
+               confMatrix.RF$overall['Accuracy'], 
+               KNNconfMatrix$overall['Accuracy']),
+  Sensitivity = c(ConfMatrix_Log$byClass['Sensitivity'], 
+                  confMatrixCART$byClass['Sensitivity'], 
+                  confMatrix.RF$byClass['Sensitivity'], 
+                  KNNconfMatrix$byClass['Sensitivity']),
+  Specificity = c(ConfMatrix_Log$byClass['Specificity'], 
+                  confMatrixCART$byClass['Specificity'], 
+                  confMatrix.RF$byClass['Specificity'], 
+                  KNNconfMatrix$byClass['Specificity']),
+  AUC = c(auc(log_roc),
+          auc(rocCurveCART), 
+          auc(roc_curve_RF), 
+          KNN_roc_Churn$auc)
+)
+table
+```
+
+
+```{r}
+
+
+
+# library(caret)
+# # Assuming your RF model is named RF.model
+# varImp_object <- varImp(RandomForest_Exited, scale = TRUE)
+# print(varImp_object)  # Print variable importance
+# plot(varImp_object)   # Plot variable importance
+# 
+
+library(randomForest)
+# Assuming your RF model is named RF.model
+importance(RandomForest_Exited)  # View variable importance scores
+varImpPlot(RandomForest_Exited)  # Plot variable importance
+
+# Create a scatterplot
+ggplot(train_data_std, aes(x = Age, y = Exited)) +
+  geom_jitter(color = "blue", width = 0.3, height = 0.05) +
+  labs(title = "Jittered Scatterplot of Exited vs Age",
+       x = "Age",
+       y = "Exited") +
+  theme_minimal()
+
+
+
+```
+
+
+## check if clustering is correct. remove below later. i was trying to do something :)
+```{r}
+
+# distance.std1= dist(train_data_std, method = "euclidean")
+# 
+# 
+# #### Hierarchical clustering #####
+# hClustering1 <- hclust(distance.std1, method="ward.D")
+# plot(hClustering1, hang = -1, ann = FALSE)
+# num.cluster <- 4
+# clusters <- cutree(hClustering1, k = num.cluster)
+# rect.hclust(hClustering1, k = num.cluster, border = 2:4)
+# 
+# #number of members in each cluster
+# table(clusters)
+# #the table is not in order of the boxes, rather it's in descending order of the # of companies.
+```
+```{r}
+
+
+######## K-means clustering ########
+# set.seed(123)
+# K=4
+# kmClustering1=kmeans(train_data_std, centers = K )
+
+# show cluster membership
+# kmClustering1$cluster
+
+# Cluster statistics
+# kmClustering1$centers
+# kmClustering1$size
+# 
+# # plot an empty scatter plot
+# plot(c(0), xaxt = 'n', ylab = "", type = "l", ylim = c(min(kmClustering$centers), max(kmClustering$centers)), xlim = c(0, 8))
+# 
+# # label x-axes
+# #axis(1, at = c(1:8), labels = names(train_data))
+# 
+# # plot centroids
+# for (i in c(1:K)) lines(kmClustering1$centers[i,], lty = i, lwd = 2, col= ifelse(i %in% c(1, 3, 5),"black", "dark grey"))
+# 
+# # name clusters
+# text(x = 0.5, y = kmClustering1$centers[, 1], labels = paste("Cluster", c(1:K))) 
+# 
+# 
+# #in graph, cluster 2 has the highest sales. whereas cluster 3 has the highest nuclear
+# 
+# #Elbow method
+# #install.packages("factoextra")
+# library(factoextra)
+# fviz_nbclust(utilities.std, FUNcluster = kmeans, method = "wss")
+
+```
+
